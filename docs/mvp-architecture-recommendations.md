@@ -65,7 +65,7 @@ Focus on delegates who represent diverse viewpoints and have substantial documen
 │                       ┌──────▼───────┐                          │
 │                       │    Vector    │                          │
 │                       │   Database   │                          │
-│                       │  (ChromaDB)  │                          │
+│                       │  (Pinecone)  │                          │
 │                       └──────────────┘                          │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -80,22 +80,57 @@ Focus on delegates who represent diverse viewpoints and have substantial documen
 | Component | Recommendation | Rationale |
 |-----------|----------------|-----------|
 | **Language** | Python 3.11+ | Richer LLM ecosystem, faster prototyping |
-| **LLM Provider** | OpenAI GPT-4o-mini | Cost-effective, good quality for MVP |
-| **Embeddings** | OpenAI text-embedding-3-small | Simple integration, adequate quality |
-| **Vector DB** | ChromaDB (local) | Zero infrastructure, easy setup |
-| **Framework** | LangChain | Battle-tested, good abstractions |
+| **LLM Provider** | Hugging Face Inference API | Cost-effective, open models, good free tier |
+| **LLM Model** | `mistralai/Mixtral-8x7B-Instruct-v0.1` | Strong instruction-following, 32k context |
+| **Embeddings** | `sentence-transformers/all-MiniLM-L6-v2` | Fast, high-quality, free on HF |
+| **Vector DB** | Pinecone (Starter/Free tier) | Managed cloud, generous free tier |
+| **Framework** | LangChain + `langchain-huggingface` | Native HF integration |
 | **Testing** | pytest + Hypothesis | Python standard + property-based |
-| **Storage** | SQLite + JSON files | Simple persistence, no server needed |
+| **Storage** | Pinecone + JSON files | Cloud persistence for vectors |
 
 ### Why These Choices?
 
-1. **ChromaDB over Pinecone/Weaviate**: For MVP, local vector storage eliminates infrastructure complexity. Can migrate to managed solution later.
+1. **Hugging Face Inference API**:
+   - Free tier includes rate-limited access to many models
+   - Pro tier ($9/mo) provides higher rate limits
+   - No per-token costs like OpenAI
+   - Access to open models (Mixtral, Llama, Falcon, etc.)
+   - Easy to switch models without code changes
 
-2. **GPT-4o-mini over GPT-4-turbo**: 10-15x cheaper, sufficient quality for MVP validation. Reserve GPT-4-turbo for production or secondary validation.
+2. **Mixtral-8x7B-Instruct**:
+   - Best open-source model for instruction-following
+   - 32k context window (sufficient for RAG + conversation history)
+   - Excellent at maintaining character/persona
+   - Available on HF Inference API free tier
 
-3. **LangChain over raw API**: Provides useful abstractions (chains, retrievers, memory) without over-engineering. Skip LangGraph complexity for MVP.
+3. **Pinecone Free Tier**:
+   - 1 index, 100k vectors free
+   - Fully managed, no infrastructure
+   - More than sufficient for MVP (50-100 docs)
+   - Easy upgrade path to paid tiers
 
-4. **SQLite over PostgreSQL**: No server management, portable, sufficient for MVP persistence needs.
+4. **sentence-transformers for Embeddings**:
+   - Free via HF Inference API
+   - `all-MiniLM-L6-v2` is fast and high-quality
+   - 384-dimensional vectors (efficient storage)
+
+### Alternative Model Options
+
+| Model | Strengths | Best For |
+|-------|-----------|----------|
+| `mistralai/Mixtral-8x7B-Instruct-v0.1` | Best overall quality | Primary generation |
+| `mistralai/Mistral-7B-Instruct-v0.2` | Faster, lighter | Development/testing |
+| `meta-llama/Llama-2-70b-chat-hf` | Strong reasoning | Complex debates |
+| `HuggingFaceH4/zephyr-7b-beta` | Good instruction-following | Budget option |
+
+### Cost Comparison
+
+| Provider | MVP Monthly Cost (Est.) |
+|----------|------------------------|
+| **HF Inference API (Free)** | $0 (rate-limited) |
+| **HF Inference API (Pro)** | $9/month |
+| **OpenAI GPT-4o-mini** | $50-100/month |
+| **OpenAI GPT-4-turbo** | $200-500/month |
 
 ---
 
@@ -105,6 +140,10 @@ Focus on delegates who represent diverse viewpoints and have substantial documen
 
 ```python
 # src/agents/delegate_agent.py
+
+from dataclasses import dataclass
+from typing import Literal
+from langchain_huggingface import HuggingFaceEndpoint
 
 @dataclass
 class DelegateProfile:
@@ -119,7 +158,7 @@ class DelegateProfile:
     few_shot_examples: list[str]
 
 class DelegateAgent:
-    def __init__(self, profile: DelegateProfile, llm: ChatOpenAI, rag: RAGSystem):
+    def __init__(self, profile: DelegateProfile, llm: HuggingFaceEndpoint, rag: RAGSystem):
         self.profile = profile
         self.llm = llm
         self.rag = rag
@@ -132,11 +171,33 @@ class DelegateAgent:
         # 2. Build prompt with profile, context, and sources
         prompt = self._build_prompt(topic, context, sources)
 
-        # 3. Generate response
+        # 3. Generate response via HF Inference API
         response = await self.llm.ainvoke(prompt)
 
         # 4. Format with citations
         return self._format_turn(response, sources)
+
+    def _build_prompt(self, topic: str, context: ConversationContext, sources: list[Source]) -> str:
+        """Build instruction prompt for Mixtral."""
+        return f"""<s>[INST] You are {self.profile.name}, a delegate from {self.profile.state} at the 1787 Constitutional Convention.
+
+PERSONALITY: {self.profile.rhetorical_style}
+IDEOLOGY: {self.profile.ideology}
+KNOWN POSITIONS: {self.profile.known_positions}
+
+HISTORICAL SOURCES:
+{self._format_sources(sources)}
+
+RECENT DEBATE:
+{self._format_history(context.recent_history)}
+
+Current topic: {topic}
+Current date: {context.current_date}
+
+Respond as {self.profile.name} would, using 18th-century language and rhetoric.
+Include citations to sources using【source】format.
+Never reference events after September 17, 1787.
+[/INST]"""
 ```
 
 ### 2. RAG System Module
@@ -144,12 +205,29 @@ class DelegateAgent:
 ```python
 # src/knowledge/rag_system.py
 
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone
+
 class RAGSystem:
-    def __init__(self, vectorstore: Chroma, embeddings: OpenAIEmbeddings):
-        self.vectorstore = vectorstore
-        self.embeddings = embeddings
-        self.retriever = vectorstore.as_retriever(
-            search_kwargs={"k": 5, "filter": {"date_max": "1787-09-17"}}
+    def __init__(self, index_name: str = "farrand-sources"):
+        # Initialize HF embeddings (free via Inference API)
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+
+        # Initialize Pinecone
+        pc = Pinecone()  # Uses PINECONE_API_KEY env var
+        self.vectorstore = PineconeVectorStore(
+            index=pc.Index(index_name),
+            embedding=self.embeddings
+        )
+
+        self.retriever = self.vectorstore.as_retriever(
+            search_kwargs={
+                "k": 5,
+                "filter": {"date_max": {"$lte": "1787-09-17"}}
+            }
         )
 
     async def retrieve(self, query: str, delegate_name: str = None) -> list[Source]:
@@ -167,12 +245,70 @@ class RAGSystem:
             date=doc.metadata['date'],
             author=doc.metadata.get('author')
         )
+
+    @classmethod
+    def ingest_documents(cls, documents: list[dict], index_name: str = "farrand-sources"):
+        """Ingest documents into Pinecone."""
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+
+        texts = [doc["content"] for doc in documents]
+        metadatas = [
+            {
+                "collection": doc["collection"],
+                "doc_id": doc["id"],
+                "date": doc["date"],
+                "author": doc.get("author", "unknown")
+            }
+            for doc in documents
+        ]
+
+        PineconeVectorStore.from_texts(
+            texts=texts,
+            embedding=embeddings,
+            metadatas=metadatas,
+            index_name=index_name
+        )
 ```
 
-### 3. Conversation Manager
+### 3. LLM Configuration Module
+
+```python
+# src/config/llm_config.py
+
+import os
+from langchain_huggingface import HuggingFaceEndpoint
+
+def get_llm(
+    model_id: str = "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    temperature: float = 0.4,
+    max_new_tokens: int = 512
+) -> HuggingFaceEndpoint:
+    """
+    Initialize Hugging Face Inference API client.
+
+    Requires HUGGINGFACEHUB_API_TOKEN environment variable.
+    """
+    return HuggingFaceEndpoint(
+        repo_id=model_id,
+        temperature=temperature,
+        max_new_tokens=max_new_tokens,
+        huggingfacehub_api_token=os.environ.get("HUGGINGFACEHUB_API_TOKEN"),
+        task="text-generation",
+    )
+
+# Environment variables required:
+# - HUGGINGFACEHUB_API_TOKEN: Your HF API token (free at huggingface.co)
+# - PINECONE_API_KEY: Your Pinecone API key (free tier available)
+```
+
+### 4. Conversation Manager
 
 ```python
 # src/orchestration/conversation_manager.py
+
+from datetime import date
 
 class ConversationManager:
     def __init__(self, agents: dict[str, DelegateAgent], validator: ConstraintValidator):
@@ -193,7 +329,7 @@ class ConversationManager:
             current_date=self.current_date
         )
 
-        # 3. Generate response
+        # 3. Generate response via HF Inference API
         turn = await self.agents[speaker].generate_response(self.current_topic, context)
 
         # 4. Validate
@@ -212,10 +348,19 @@ class ConversationManager:
         ...
 ```
 
-### 4. Constraint Validator
+### 5. Constraint Validator
 
 ```python
 # src/validation/constraint_validator.py
+
+from datetime import date
+from dataclasses import dataclass
+
+@dataclass
+class ValidationResult:
+    is_valid: bool
+    errors: list[str]
+    feedback: str | None
 
 class ConstraintValidator:
     def __init__(self, anachronism_terms: set[str]):
@@ -310,18 +455,19 @@ tests/fixtures/episodes/
 
 ### Phase 1: Foundation (Core Infrastructure)
 - [ ] Project structure and interfaces
-- [ ] ChromaDB setup with basic document ingestion
-- [ ] OpenAI LLM integration
-- [ ] Basic prompt templates
+- [ ] Pinecone index setup and document ingestion pipeline
+- [ ] Hugging Face Inference API integration
+- [ ] Basic prompt templates for Mixtral instruction format
+- [ ] Environment configuration (HF token, Pinecone API key)
 
 ### Phase 2: Single Agent Demo
 - [ ] Madison agent with full profile
-- [ ] RAG retrieval integration
-- [ ] Basic dialogue generation
+- [ ] RAG retrieval integration with Pinecone
+- [ ] Basic dialogue generation via HF API
 - [ ] Citation formatting
 
 ### Phase 3: Multi-Agent Conversation
-- [ ] All 7 delegate agents
+- [ ] All 7 delegate agents with profiles
 - [ ] Conversation manager with turn-taking
 - [ ] Speaker selection logic
 - [ ] Conversation history tracking
@@ -379,11 +525,30 @@ tests/fixtures/episodes/
 
 | Risk | Mitigation |
 |------|------------|
-| LLM costs during development | Use GPT-4o-mini, aggressive caching |
+| HF API rate limits | Use Pro tier ($9/mo) or implement request queuing |
+| Model quality variance | Test multiple models (Mixtral, Mistral, Zephyr), pick best |
 | RAG quality issues | Start with curated, high-quality sources |
-| Inconsistent delegate behavior | Extensive few-shot examples, low temperature |
+| Inconsistent delegate behavior | Extensive few-shot examples, low temperature (0.3-0.4) |
 | Scope creep | Strict MVP boundary enforcement |
 | Historical inaccuracy | Expert review of initial episode fixtures |
+| Pinecone index limits | Free tier has 100k vectors - sufficient for MVP |
+
+### HF Inference API Considerations
+
+1. **Rate Limits**: Free tier is rate-limited. For development, use smaller model (Mistral-7B) to iterate faster.
+
+2. **Model Availability**: Some models may be temporarily unavailable. Have fallback models configured.
+
+3. **Latency**: HF Inference API can have variable latency. Implement timeouts and retries.
+
+```python
+# Example retry configuration
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+async def generate_with_retry(llm, prompt):
+    return await llm.ainvoke(prompt)
+```
 
 ---
 
@@ -407,7 +572,44 @@ tests/fixtures/episodes/
 
 ---
 
-## Appendix: Project Structure
+## Appendix A: Dependencies
+
+### Core Dependencies (requirements.txt)
+
+```
+# LLM & Embeddings
+langchain>=0.1.0
+langchain-huggingface>=0.0.3
+huggingface-hub>=0.20.0
+
+# Vector Database
+pinecone-client>=3.0.0
+langchain-pinecone>=0.0.3
+
+# Utilities
+python-dotenv>=1.0.0
+tenacity>=8.2.0
+pydantic>=2.0.0
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.23.0
+hypothesis>=6.0.0
+```
+
+### Environment Variables (.env)
+
+```bash
+# Hugging Face (free at huggingface.co/settings/tokens)
+HUGGINGFACEHUB_API_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxx
+
+# Pinecone (free at pinecone.io)
+PINECONE_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+---
+
+## Appendix B: Project Structure
 
 ```
 project-farrand/
@@ -416,6 +618,9 @@ project-farrand/
 │   │   ├── __init__.py
 │   │   ├── delegate_agent.py
 │   │   └── profiles.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── llm_config.py
 │   ├── knowledge/
 │   │   ├── __init__.py
 │   │   ├── rag_system.py
@@ -438,6 +643,7 @@ project-farrand/
 │       └── episodes/
 ├── docs/
 │   └── mvp-architecture-recommendations.md
+├── .env.example
 ├── pyproject.toml
 └── README.md
 ```
