@@ -80,10 +80,10 @@ Focus on delegates who represent diverse viewpoints and have substantial documen
 | Component | Recommendation | Rationale |
 |-----------|----------------|-----------|
 | **Language** | Python 3.11+ | Richer LLM ecosystem, faster prototyping |
-| **LLM Provider** | Hugging Face Inference API | Cost-effective, open models, good free tier |
-| **LLM Model** | `mistralai/Mixtral-8x7B-Instruct-v0.1` | Strong instruction-following, 32k context |
-| **Embeddings** | `sentence-transformers/all-MiniLM-L6-v2` | Fast, high-quality, free on HF |
-| **Vector DB** | Pinecone (Starter/Free tier) | Managed cloud, generous free tier |
+| **LLM Provider** | Hugging Face Inference API | Access to top open-weight models |
+| **LLM Model** | `meta-llama/Llama-3.1-70B-Instruct` | Best open model, 128k context |
+| **Embeddings** | `BAAI/bge-large-en-v1.5` | State-of-the-art retrieval embeddings |
+| **Vector DB** | Pinecone (Starter tier) | Managed cloud, scales easily |
 | **Framework** | LangChain + `langchain-huggingface` | Native HF integration |
 | **Testing** | pytest + Hypothesis | Python standard + property-based |
 | **Storage** | Pinecone + JSON files | Cloud persistence for vectors |
@@ -91,46 +91,60 @@ Focus on delegates who represent diverse viewpoints and have substantial documen
 ### Why These Choices?
 
 1. **Hugging Face Inference API**:
-   - Free tier includes rate-limited access to many models
-   - Pro tier ($9/mo) provides higher rate limits
-   - No per-token costs like OpenAI
-   - Access to open models (Mixtral, Llama, Falcon, etc.)
-   - Easy to switch models without code changes
+   - Access to latest Llama 3.1, Mixtral, and other top models
+   - Pro tier ($9/mo) provides generous rate limits
+   - Serverless - no infrastructure management
+   - Easy model switching for A/B testing
+   - Dedicated Endpoints available for production scale
 
-2. **Mixtral-8x7B-Instruct**:
-   - Best open-source model for instruction-following
-   - 32k context window (sufficient for RAG + conversation history)
-   - Excellent at maintaining character/persona
-   - Available on HF Inference API free tier
+2. **Llama 3.1 70B Instruct** (Primary Model):
+   - **State-of-the-art open model** - rivals GPT-4 on many benchmarks
+   - 128k context window (excellent for long debates + RAG)
+   - Exceptional at role-playing and maintaining character
+   - Strong reasoning for complex historical arguments
+   - Available via HF Inference API
 
-3. **Pinecone Free Tier**:
-   - 1 index, 100k vectors free
-   - Fully managed, no infrastructure
-   - More than sufficient for MVP (50-100 docs)
-   - Easy upgrade path to paid tiers
-
-4. **sentence-transformers for Embeddings**:
+3. **BGE-Large Embeddings**:
+   - Top-tier retrieval performance (better than OpenAI ada-002)
+   - 1024-dimensional vectors for nuanced semantic matching
+   - Optimized for RAG applications
    - Free via HF Inference API
-   - `all-MiniLM-L6-v2` is fast and high-quality
-   - 384-dimensional vectors (efficient storage)
 
-### Alternative Model Options
+4. **Pinecone**:
+   - Fully managed, high-performance vector search
+   - Metadata filtering for date constraints
+   - Scales from free tier to enterprise
 
-| Model | Strengths | Best For |
-|-------|-----------|----------|
-| `mistralai/Mixtral-8x7B-Instruct-v0.1` | Best overall quality | Primary generation |
-| `mistralai/Mistral-7B-Instruct-v0.2` | Faster, lighter | Development/testing |
-| `meta-llama/Llama-2-70b-chat-hf` | Strong reasoning | Complex debates |
-| `HuggingFaceH4/zephyr-7b-beta` | Good instruction-following | Budget option |
+### Model Quality Tiers
+
+| Tier | Model | Quality | Cost (HF Pro) | Best For |
+|------|-------|---------|---------------|----------|
+| **Tier 1** | `meta-llama/Llama-3.1-70B-Instruct` | Excellent | ~$0.0009/1k tokens | Production MVP |
+| **Tier 1** | `mistralai/Mistral-Large-Instruct-2407` | Excellent | ~$0.002/1k tokens | Alternative top-tier |
+| **Tier 2** | `meta-llama/Llama-3.1-8B-Instruct` | Very Good | ~$0.0001/1k tokens | Development/testing |
+| **Tier 2** | `mistralai/Mixtral-8x7B-Instruct-v0.1` | Very Good | ~$0.0002/1k tokens | Cost-conscious |
+| **Tier 3** | `mistralai/Mistral-7B-Instruct-v0.3` | Good | ~$0.0001/1k tokens | Rapid iteration |
+
+### Recommended Approach
+
+```
+Development:  Llama-3.1-8B-Instruct  (fast, cheap iteration)
+Testing:      Llama-3.1-70B-Instruct (validate quality)
+Production:   Llama-3.1-70B-Instruct (best results)
+```
 
 ### Cost Comparison
 
-| Provider | MVP Monthly Cost (Est.) |
-|----------|------------------------|
-| **HF Inference API (Free)** | $0 (rate-limited) |
-| **HF Inference API (Pro)** | $9/month |
-| **OpenAI GPT-4o-mini** | $50-100/month |
-| **OpenAI GPT-4-turbo** | $200-500/month |
+| Provider/Model | Est. Cost per 10k Turns | Monthly Est. |
+|----------------|------------------------|--------------|
+| **HF: Llama-3.1-70B** | ~$9 | $20-50 |
+| **HF: Llama-3.1-8B** | ~$1 | $5-10 |
+| **HF: Mixtral-8x7B** | ~$2 | $10-20 |
+| OpenAI GPT-4o-mini | ~$5 | $50-100 |
+| OpenAI GPT-4-turbo | ~$50 | $200-500 |
+| Anthropic Claude 3.5 Sonnet | ~$30 | $100-300 |
+
+**Note**: HF Pro subscription ($9/mo) required for reliable access to 70B models.
 
 ---
 
@@ -178,14 +192,20 @@ class DelegateAgent:
         return self._format_turn(response, sources)
 
     def _build_prompt(self, topic: str, context: ConversationContext, sources: list[Source]) -> str:
-        """Build instruction prompt for Mixtral."""
-        return f"""<s>[INST] You are {self.profile.name}, a delegate from {self.profile.state} at the 1787 Constitutional Convention.
+        """Build instruction prompt for Llama 3.1."""
+        system_prompt = f"""You are {self.profile.name}, a delegate from {self.profile.state} at the 1787 Constitutional Convention.
 
 PERSONALITY: {self.profile.rhetorical_style}
 IDEOLOGY: {self.profile.ideology}
 KNOWN POSITIONS: {self.profile.known_positions}
 
-HISTORICAL SOURCES:
+RULES:
+- Respond as {self.profile.name} would, using authentic 18th-century language and rhetoric
+- Include citations to sources using【source】format
+- Never reference events after September 17, 1787
+- Stay true to your documented historical positions"""
+
+        user_prompt = f"""HISTORICAL SOURCES:
 {self._format_sources(sources)}
 
 RECENT DEBATE:
@@ -194,10 +214,16 @@ RECENT DEBATE:
 Current topic: {topic}
 Current date: {context.current_date}
 
-Respond as {self.profile.name} would, using 18th-century language and rhetoric.
-Include citations to sources using【source】format.
-Never reference events after September 17, 1787.
-[/INST]"""
+Speak now as {self.profile.name}."""
+
+        # Llama 3.1 chat format
+        return f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
 ```
 
 ### 2. RAG System Module
@@ -209,11 +235,17 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
 
+# BGE embeddings - state-of-the-art for retrieval
+EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+EMBEDDING_DIMENSION = 1024  # For Pinecone index config
+
 class RAGSystem:
     def __init__(self, index_name: str = "farrand-sources"):
-        # Initialize HF embeddings (free via Inference API)
+        # Initialize BGE embeddings (top-tier retrieval quality)
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+            model_name=EMBEDDING_MODEL,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True}  # BGE recommends normalization
         )
 
         # Initialize Pinecone
@@ -232,8 +264,9 @@ class RAGSystem:
 
     async def retrieve(self, query: str, delegate_name: str = None) -> list[Source]:
         """Retrieve relevant historical sources for a query."""
-        # Add delegate-specific context to query
-        enhanced_query = f"{delegate_name}: {query}" if delegate_name else query
+        # BGE recommends prefixing queries for better retrieval
+        prefix = "Represent this sentence for searching relevant passages: "
+        enhanced_query = f"{prefix}{delegate_name}: {query}" if delegate_name else f"{prefix}{query}"
 
         docs = await self.retriever.ainvoke(enhanced_query)
         return [self._doc_to_source(doc) for doc in docs]
@@ -250,7 +283,9 @@ class RAGSystem:
     def ingest_documents(cls, documents: list[dict], index_name: str = "farrand-sources"):
         """Ingest documents into Pinecone."""
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+            model_name=EMBEDDING_MODEL,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True}
         )
 
         texts = [doc["content"] for doc in documents]
@@ -278,17 +313,30 @@ class RAGSystem:
 # src/config/llm_config.py
 
 import os
+from enum import Enum
 from langchain_huggingface import HuggingFaceEndpoint
 
+class ModelTier(Enum):
+    """Model tiers for different use cases."""
+    DEVELOPMENT = "meta-llama/Llama-3.1-8B-Instruct"      # Fast iteration
+    PRODUCTION = "meta-llama/Llama-3.1-70B-Instruct"      # Best quality
+    BUDGET = "mistralai/Mixtral-8x7B-Instruct-v0.1"       # Cost-conscious
+
 def get_llm(
-    model_id: str = "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    model_id: str = ModelTier.PRODUCTION.value,
     temperature: float = 0.4,
     max_new_tokens: int = 512
 ) -> HuggingFaceEndpoint:
     """
     Initialize Hugging Face Inference API client.
 
+    Args:
+        model_id: HF model repo ID (default: Llama-3.1-70B-Instruct)
+        temperature: Sampling temperature (0.3-0.5 recommended for consistency)
+        max_new_tokens: Max response length
+
     Requires HUGGINGFACEHUB_API_TOKEN environment variable.
+    HF Pro subscription ($9/mo) recommended for 70B model access.
     """
     return HuggingFaceEndpoint(
         repo_id=model_id,
@@ -298,9 +346,18 @@ def get_llm(
         task="text-generation",
     )
 
+# Quick helpers for common configurations
+def get_dev_llm() -> HuggingFaceEndpoint:
+    """Fast 8B model for development and testing."""
+    return get_llm(model_id=ModelTier.DEVELOPMENT.value)
+
+def get_prod_llm() -> HuggingFaceEndpoint:
+    """High-quality 70B model for production."""
+    return get_llm(model_id=ModelTier.PRODUCTION.value)
+
 # Environment variables required:
-# - HUGGINGFACEHUB_API_TOKEN: Your HF API token (free at huggingface.co)
-# - PINECONE_API_KEY: Your Pinecone API key (free tier available)
+# - HUGGINGFACEHUB_API_TOKEN: Your HF API token (get at huggingface.co/settings/tokens)
+# - PINECONE_API_KEY: Your Pinecone API key (free tier at pinecone.io)
 ```
 
 ### 4. Conversation Manager
