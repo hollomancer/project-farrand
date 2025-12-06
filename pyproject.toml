@@ -1,0 +1,35 @@
+[project]
+name = "project-farrand"
+version = "0.1.0"
+description = "Constitutional Convention Simulation System"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.1.0",
+    "langchain-huggingface>=0.0.3",
+    "huggingface-hub>=0.20.0",
+    "pinecone-client>=3.0.0",
+    "langchain-pinecone>=0.0.3",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "hypothesis>=6.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agents", "src/config", "src/knowledge", "src/orchestration", "src/validation"]
